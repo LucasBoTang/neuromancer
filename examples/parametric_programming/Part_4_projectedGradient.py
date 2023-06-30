@@ -144,7 +144,7 @@ if __name__ == "__main__":
     # proj(sol_map(xi)) -> x
     proj = solvers.GradientProjection(constraints=[con_2, con_3],          # inequality constraints to be corrected
                                       input_keys=["x"],                    # primal variable to be updated
-                                      num_steps=1,                         # number of rollout steps of the solver method
+                                      num_steps=3,                         # number of rollout steps of the solver method
                                       step_size=0.01,                      # step size of the solver method
                                       name='proj')
 
@@ -215,7 +215,7 @@ if __name__ == "__main__":
         a_opti = opti.parameter()
         # define objective and constraints
         opti.minimize((1 - x) ** 2 + a_opti * (y - x ** 2) ** 2)
-        opti.subject_to(x >= y)
+        opti.subject_to(x == y)
         opti.subject_to((p_opti / 2) ** 2 <= x ** 2 + y ** 2)
         opti.subject_to(x ** 2 + y ** 2 <= p_opti ** 2)
         # select IPOPT solver and solve the NLP
