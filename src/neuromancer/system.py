@@ -79,17 +79,17 @@ class MovingHorizon(nn.Module):
         self.history = {k: [] for k in self.input_keys} if history is None else history
         self.ndelay, self.module = ndelay, module
 
-    def forward(self, input):
+    def forward(self, data):
         """
         The forward pass appends the input dictionary to the history buffer and gives
         last ndelay steps to the module. If history is blank the first step will be
         repeated ndelay times to initialize the buffer.
 
-        :param input: (dict: str: 2-d tensor (batch, dim)) Dictionary of single step tensor inputs
+        :param data: (dict: str: 2-d tensor (batch, dim)) Dictionary of single step tensor inputs
         :return: (dict: str: 2-d Tensor (batch, dim)) Dictionary of single step tensor outputs
         """
         for k in self.input_keys:
-            self.history[k].append(input[k])
+            self.history[k].append(data[k])
             if len(self.history[k]) == 1:
                 self.history[k] *= self.ndelay
         inputs = {k: torch.stack(self.history[k][-self.ndelay:]) for k in self.input_keys}
