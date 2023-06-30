@@ -12,12 +12,21 @@ class BuildingEnvelope(ODE_NonAutonomous):
     linear building envelope dynamics and bilinear heat flow input dynamics for
     different building types are downloaded as needed and stored at buildings_parameters/*.mat
     Models obtained from: https://github.com/drgona/BeSim
+
+    These models are suitable for model predictive control (MPC) design.
+    Detailed model description and optimal control problem formulations
+    can be found in following papers:
+        https://www.sciencedirect.com/science/article/pii/S0378778817302190
+        https://www.sciencedirect.com/science/article/pii/S0306261918302903
     """
 
-    systems = ['SimpleSingleZone', 'Reno_full', 'Reno_ROM40', 'RenoLight_full',
+    # list of available building models
+    systems = ['SimpleSingleZone',  # single zone single input building model
+               'Reno_full', 'Reno_ROM40', 'RenoLight_full',  # residential building models
                'RenoLight_ROM40', 'Old_full', 'Old_ROM40',
-               'HollandschHuys_full', 'HollandschHuys_ROM100']
-
+               'HollandschHuys_full', 'HollandschHuys_ROM100'  # office building models
+               ]
+    # indices for observable disturbance (ambient temperature)
     T_dist_idx = {'Reno_full': [40], 'Reno_ROM40': [40],
                   'RenoLight_full': [40], 'RenoLight_ROM40': [40],
                   'Old_full': [40], 'Old_ROM40': [40],
@@ -35,40 +44,44 @@ class BuildingEnvelope(ODE_NonAutonomous):
                               Meta-data (physical units, system type, etc.)
         """
         p = loadmat(self.path)
-        self.p = p
-        nx = p['Ad'].shape[0]
-        x0 = p['x0'].reshape(nx).astype(np.float32) if self.system == 'SimpleSingleZone' else np.zeros(nx, dtype=np.float32)
+        self.p = p                          # file paths
+        nx = p['Ad'].shape[0]               # number of states
+        self.nq = p['Bd'].shape[1]          # nuber of heat flows inputs
+        self.n_mf = p['Bd'].shape[1]        # nuber of mass flow inputs
+        self.n_dT = p['dT_max'].shape[0]    # nuber of supply temperature inputs
+        x0 = p['x0'].reshape(nx).astype(np.float32) if self.system == 'SimpleSingleZone' \
+            else np.zeros(nx, dtype=np.float32)  # pre-defined initial conditions
         self.dT_max = p['dT_max'].flatten().astype(np.float32)  # maximal temperature difference deg C
         self.dT_min = p['dT_min'].flatten().astype(np.float32)  # minimal temperature difference deg C
-        self.nq = p['Bd'].shape[1]
         self.mf_max = p['mf_max'].flatten().astype(np.float32)  # maximal nominal mass flow l/h
-        self.mf_min = p['mf_min'].flatten().astype(np.float32)
-        self.d_idx = self.T_dist_idx[self.system]
-        self.n_mf = p['Bd'].shape[1]
-        self.n_dT = p['dT_max'].shape[0]
-        variables = {'x0': x0,
-                     'U': self.get_U(self.nsim + 1), # control actions
-                     'D': p['disturb'][self.nsim + 1],
-                     '_D': p['disturb'],
-                     'D_obs': p['disturb'][self.nsim + 1][self.d_idx],
+        self.mf_min = p['mf_min'].flatten().astype(np.float32)  # minimal nominal mass flow l/h
+        self.d_idx = self.T_dist_idx[self.system]               # select the index of observable disturbance
+        # system variables
+        variables = {'x0': x0,                              # initial conditions
+                     'U': self.get_U(self.nsim + 1),        # control actions
+                     'D': p['disturb'][self.nsim + 1],                  # sequence of full disturbance signal
+                     '_D': p['disturb'],                                # pre-computed full disturbance signal
+                     'D_obs': p['disturb'][self.nsim + 1][self.d_idx],  # sequence of observable disturbance
                      }
+        # system constants
         constants = {'ts': 0.01,
                      # Heat flow equation constants
                      'rho': 0.997,  # density  of water kg/1l
                      'cp': 4185.5,  # specific heat capacity of water J/(kg/K)
                      'time_reg': 1. / 3600.,  # time regularization of the mass flow 1 hour = 3600 seconds
-                     'nx': nx,
-                     'ny': p['Cd'].shape[0],
-                     'nq': p['Bd'].shape[1],
-                     'nd': p['Ed'].shape[1],
+                     'nx': nx,                  # number of latent states (not directly observable)
+                     'ny': p['Cd'].shape[0],    # number of controlled variables (observable)
+                     'nq': p['Bd'].shape[1],    # number of control variabbles (heat flows)
+                     'nd': p['Ed'].shape[1],    # number of full pre-computed disturnances
                     }
-        parameters = {'A': p['Ad'].astype(np.float32),  # Linear system parameters
-                      'Beta': p['Bd'].astype(np.float32),  # Variable B used by backend
-                      'C': p['Cd'].astype(np.float32),
-                      'E': p['Ed'].astype(np.float32),
-                      'G': p['Gd'].astype(np.float32),
-                      'F': p['Fd'].astype(np.float32),
-                      'y_ss': p['y_ss'].reshape(-1).astype(np.float32),  # Physical unit offset for observation
+        # parameters of the linear state space models
+        parameters = {'A': p['Ad'].astype(np.float32),      # sytem dynamics matrix
+                      'Beta': p['Bd'].astype(np.float32),   # control input dynamics matrix
+                      'C': p['Cd'].astype(np.float32),      # output matrix
+                      'E': p['Ed'].astype(np.float32),      # disturbance dynamics matrix
+                      'G': p['Gd'].astype(np.float32),      # linearization vector
+                      'F': p['Fd'].astype(np.float32),      # linearization vector
+                      'y_ss': p['y_ss'].reshape(-1).astype(np.float32),  # Physical unit offset for steady state observation
                       }
         meta = {'type': p['type'], 'HC_system': p['HC_system']}
         return variables, constants, parameters, meta
@@ -96,6 +109,9 @@ class BuildingEnvelope(ODE_NonAutonomous):
                          backend=backend, requires_grad=requires_grad, set_stats=set_stats)
 
     def get_xy(self):
+        """
+        initial conditions of the system
+        """
         x0 = self.x0
         y0 = self.C @ x0 + self.F.ravel() - self.y_ss
         return x0, y0
@@ -116,6 +132,12 @@ class BuildingEnvelope(ODE_NonAutonomous):
 
     @cast_backend
     def get_U(self, nsim, type='default'):
+        """
+        get a sequence of control inputs for perturbing the system
+        :param nsim: (int) number of simulation steps
+        :param type: (str) type of the signal implemented in psl.signals
+        :return:
+        """
         if type == "default":
             return periodic(nsim, self.umin.shape[-1], max=self.umax / 2., min=self.umin, periods=int(np.ceil(nsim / 48.)),
                             form='sin') + noise(nsim, self.umin.shape[-1])
@@ -124,6 +146,11 @@ class BuildingEnvelope(ODE_NonAutonomous):
 
     @cast_backend
     def get_q(self, u):
+        """
+        compute heat flows using convective heat flow equation
+        :param u: concatenated vector of mass flows m_flow and supply temperatures dT
+        :return: computed heat flow
+        """
         m_flow = u[0:self.n_mf]
         dT = u[self.n_mf:self.n_mf + self.n_dT]
         q = m_flow * self.rho * self.cp * self.time_reg * dT
@@ -131,16 +158,31 @@ class BuildingEnvelope(ODE_NonAutonomous):
 
     @cast_backend
     def get_D(self, nsim):
+        """
+        get a sequence of disturbances (ambient temperature, occupancy, solar irradiation) perturbing the system
+        :param nsim: (int) number of simulation steps
+        :return:
+        """
         start_idx = np.random.randint(0, len(self._D)-1-nsim)
         return self._D[start_idx:start_idx+nsim]
 
     @cast_backend
     def get_D_obs(self, nsim):
+        """
+        get a sequence of observable disturbances (ambient temperature)
+        :param nsim: (int) number of simulation steps
+        :return:
+        """
         start_idx = np.random.randint(0, len(self._D) - 1 - nsim)
         return self._D[start_idx:start_idx + nsim, self.d_idx]
 
     @cast_backend
     def get_R(self, nsim):
+        """
+        get a sequence of desired reference to control (zone temperature)
+        :param nsim: (int) number of simulation steps
+        :return:
+        """
         s = step(nsim, self.ny, randsteps=int(np.ceil(nsim / 24.)), min=self.stats['Y']['min'] + 1.,
                  max=self.stats['Y']['max']) - 1.
         return s
@@ -159,10 +201,17 @@ class BuildingEnvelope(ODE_NonAutonomous):
         return x.T, y.T - self.y_ss
 
     def equations(self, x, u, d):
+        """
+        Linear state space model with bilinear input equation
+        :param x:
+        :param u:
+        :param d:
+        :return:
+        """
         G = self.G.ravel() if len(x.shape) == 1 else self.G
         F = self.F.ravel() if len(x.shape) == 1 else self.F
-        q = self.get_q(u)
-        x = self.A @ x + self.Beta @ q + self.E @ d + G
+        q = self.get_q(u)                                    # bilinear heat flow equation
+        x = self.A @ x + self.Beta @ q + self.E @ d + G      # linear state space model
         y = self.C @ x + F
         return x, y
 
